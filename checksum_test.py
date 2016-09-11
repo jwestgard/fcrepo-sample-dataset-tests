@@ -49,8 +49,8 @@ def main():
                     n+1, filename, checksum, checksums[filename]
                     ))
             else:
-                print("Mismatch! {0}: {1} != {2}".format(
-                    filename, checksum, checksums[filename]
+                print("{0:3}. Mismatch! {0}: {1} != {2}".format(
+                    n+1, filename, checksum, checksums[filename]
                     ))
     print("=" * 110)
     print("Test complete: {0}/{1} successfully verified.".format(
