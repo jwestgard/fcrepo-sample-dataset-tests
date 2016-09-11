@@ -49,7 +49,7 @@ def main():
                     n+1, filename, checksum, checksums[filename]
                     ))
             else:
-                print("Mismatch! {0}: {1} = {2}".format(
+                print("Mismatch! {0}: {1} != {2}".format(
                     filename, checksum, checksums[filename]
                     ))
     print("=" * 110)
