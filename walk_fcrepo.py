@@ -56,7 +56,7 @@ def main():
         )
     # Path to the repo config (endpoint, credentials, and WebAC paths)
     parser.add_argument('-u', '--user',
-                        help='Username and password.',
+                        help='Repository credentials in the form username:password.',
                         action='store',
                         required=False
                         )
