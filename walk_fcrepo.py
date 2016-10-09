@@ -9,10 +9,15 @@ import sys
 # using link headers, determine whether a resource is rdf or non-rdf
 def is_binary(node, auth):
     response = requests.head(url=node, auth=auth)
-    if response.links['type']['url'] == 'http://www.w3.org/ns/ldp#NonRDFSource':
-        return True
+    if response.status_code == 200:
+        if response.links['type']['url'] == \
+            'http://www.w3.org/ns/ldp#NonRDFSource':
+            return True
+        else:
+            return False
     else:
-        return False
+        print("Error communicating with repository.")
+        sys.exit(1)
 
 
 # get the children of a resource based on ldp containment
@@ -22,12 +27,16 @@ def get_children(node, auth):
         return None
     else:
         response = requests.get(node, auth=auth)
-        graph = rdflib.Graph()
-        graph.parse(data=response.text, format="text/turtle")
-        predicate = rdflib.URIRef('http://www.w3.org/ns/ldp#contains')
-        children = [str(obj) for obj in graph.objects(subject=None,
-                                                      predicate=predicate)]
-        return children
+        if response.status_code == 200:
+            graph = rdflib.Graph()
+            graph.parse(data=response.text, format="text/turtle")
+            predicate = rdflib.URIRef('http://www.w3.org/ns/ldp#contains')
+            children = [str(obj) for obj in graph.objects(subject=None,
+                                                          predicate=predicate)]
+            return children
+        else:
+            print("Error communicating with repository.")
+            sys.exit(1)
 
 
 # iterator to walk an fcrepo repository based on ldp containment
@@ -52,7 +61,7 @@ class fcrepo_walker:
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Walking a Fedora repository.'
+        description='Walk an LDP repository, writing resource URIs to list.'
         )
     # Path to the repo config (endpoint, credentials, and WebAC paths)
     parser.add_argument('-u', '--user',
@@ -74,6 +83,8 @@ def main():
     args = parser.parse_args()
     if args.user:
         auth = tuple(args.user.split(':'))
+    else:
+        auth = None
     
     with open(args.output, 'w') as f:
         for resource in fcrepo_walker(args.root, auth):
