@@ -63,18 +63,18 @@ def main():
     parser = argparse.ArgumentParser(
         description='Walk an LDP repository, writing resource URIs to list.'
         )
-    # Path to the repo config (endpoint, credentials, and WebAC paths)
+    # Repository credentials
     parser.add_argument('-u', '--user',
-                        help='Username and password.',
+                        help='Repository credentials in the form username:password.',
                         action='store',
                         required=False
                         )
-    # Path to the data set (metadata and files)
+    # Path to the root node to walk
     parser.add_argument('root',
                         help='Path to root node from which to begin walk.',
                         action='store'
                         )
-    # Path to the data set (metadata and files)
+    # File in which to store the URIs found
     parser.add_argument('output',
                         help='Path to file to store output.',
                         action='store'
