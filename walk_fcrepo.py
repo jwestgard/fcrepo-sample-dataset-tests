@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import os
 import rdflib
 import requests
 import sys
@@ -21,7 +22,7 @@ def is_binary(node, auth):
 
 
 # get the children of a resource based on ldp containment
-def get_children(node, auth):
+def get_children_fcrepo(node, auth):
     print("checking {}...".format(node))
     if is_binary(node, auth):
         return None
@@ -39,6 +40,15 @@ def get_children(node, auth):
             sys.exit(1)
 
 
+# get children in a local directory tree
+def get_children_local(localpath):
+    if os.path.isfile(localpath):
+        print("checking {}...".format(localpath))
+        return None
+    else:
+        return [p.path for p in os.scandir(localpath)]
+
+
 # iterator to walk an fcrepo repository based on ldp containment
 class fcrepo_walker:
     def __init__(self, root, auth):
@@ -53,7 +63,10 @@ class fcrepo_walker:
             raise StopIteration()
         else:
             current = self.to_check.pop()
-            children = get_children(current, self.auth)
+            if current.startswith('http'):
+                children = get_children_fcrepo(current, self.auth)
+            else:
+                children = get_children_local(current)
             if children:
                 self.to_check.extend(children)
             return current
@@ -63,17 +76,20 @@ def main():
     parser = argparse.ArgumentParser(
         description='Walk an LDP repository, writing resource URIs to list.'
         )
+        
     # Repository credentials
     parser.add_argument('-u', '--user',
                         help='Repository credentials in the form username:password.',
                         action='store',
                         required=False
                         )
+                        
     # Path to the root node to walk
     parser.add_argument('root',
                         help='Path to root node from which to begin walk.',
                         action='store'
                         )
+                        
     # File in which to store the URIs found
     parser.add_argument('output',
                         help='Path to file to store output.',
