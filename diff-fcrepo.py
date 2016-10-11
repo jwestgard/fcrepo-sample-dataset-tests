@@ -112,6 +112,24 @@ class Resource():
         self.fullpath = path
         self.relpath = os.path.relpath(self.fullpath, current)
         self.counterpart = os.path.join(other, self.relpath)
+        
+    def local_to_fcrepo(self, config):
+        if self.fullpath.endswith('fcr%3Ametadata.ttl'):
+            self.resourcetype = 'rdf'
+            # replace end with fcr:metadata and remove descdir
+        elif self.fullpath.endswith('.binary'):
+            # remove extension and bindir
+            self.resourcetype = 'nonrdf'
+        else:
+            self.resourcetype = 'rdf'
+            # remove descdir and extension
+        result = config.fcrepo
+        
+        pass
+    
+    def fcrepo_to_local(self, config):
+        pass
+
 
 
 def main():
