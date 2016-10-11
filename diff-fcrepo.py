@@ -196,6 +196,12 @@ def main():
     # if rdf, compare sets of triples
     # loop over other set and perform all checks
     
+    '''
+    fcrepopath = base/rest + path
+    localpath = root/[bindir|descdir] + path + .ext|.binary|/fcr%3Ametadata+.ext
+    '''
+    
+    
     # close file if one was opened
     if args.output:
         fh.close()
