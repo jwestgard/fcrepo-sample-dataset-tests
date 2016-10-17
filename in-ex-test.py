@@ -9,11 +9,11 @@ import rdflib.compare as compare
 import re
 import requests
 import sys
-from urllib import parse
+from urllib.parse import urlparse, quote
 
 
 def is_binary(node, auth):
-    ''' Using link headers, determine whether a resource is rdf or non-rdf. '''
+    '''Using link headers, determine whether a resource is rdf or non-rdf.'''
     response = requests.head(url=node, auth=auth)
     if response.status_code == 200:
         if response.links['type']['url'] == \
@@ -27,7 +27,7 @@ def is_binary(node, auth):
 
 
 def calculate_sha1(filepath):
-    ''' Given a file or stream, return the sha1 checksum. '''
+    '''Given a file or stream, return the sha1 checksum.'''
     with open(filepath, 'rb') as f:
         sh = sha1()
         while True:
@@ -39,7 +39,7 @@ def calculate_sha1(filepath):
 
 
 def get_child_nodes(node, auth):
-    ''' Get the children based on LDP containment. '''
+    '''Get the children based on LDP containment.'''
     if is_binary(node, auth):
         metadata = [node + "/fcr:metadata"]
         return metadata
@@ -59,7 +59,7 @@ def get_child_nodes(node, auth):
 
 
 def get_directory_contents(localpath):
-    ''' Get the children based on the directory hierarchy. '''
+    '''Get the children based on the directory hierarchy.'''
     if os.path.isfile(localpath):
         return None
     else:
@@ -67,13 +67,14 @@ def get_directory_contents(localpath):
 
 
 class Config():
-    ''' Object representing the options from import/export config and 
-        command-line arguments. '''
+    '''Object representing the options from import/export config and 
+       command-line arguments.'''
     def __init__(self, configfile, auth):
         print("Loading configuration options from import/export config file...")
         self.auth = auth
         with open(configfile, 'r') as f:
             opts = [line for line in f.read().split('\n')]
+        
         for line in range(len(opts)):
             if opts[line] == '-m':
                 self.mode = opts[line + 1]
@@ -87,10 +88,20 @@ class Config():
                 self.ext = opts[line + 1]
             elif opts[line] == '-l':
                 self.lang = opts[line + 1]
+                
+        # if not specified in config, set default ext & lang to turtle
+        if not hasattr(self, 'ext'):
+            self.ext = '.ttl'
+        if not hasattr(self, 'lang'):
+            self.lang = 'text/turtle'
+        
+        self.repopath = urlparse(self.repo).path
+        self.repobase = self.repo[:-len(self.repopath)]
+        
 
 
 class Walker:
-    ''' Walk a set of Fedora resources. '''
+    '''Walk a set of Fedora resources.'''
     def __init__(self, root):
         self.to_check = [root]
       
@@ -99,7 +110,7 @@ class Walker:
 
 
 class FcrepoWalker(Walker):
-    ''' Walk resources in a live repository. '''
+    '''Walk resources in a live repository.'''
     def __init__(self, root, auth):
         Walker.__init__(self, root)
         self.auth = auth
@@ -116,7 +127,7 @@ class FcrepoWalker(Walker):
 
 
 class LocalWalker(Walker):
-    ''' Walk serialized resources on disk. '''
+    '''Walk serialized resources on disk.'''
     def __init__(self, root):
         Walker.__init__(self, root)
         
@@ -137,23 +148,19 @@ class LocalWalker(Walker):
 
 
 class Resource():
-    ''' Object representing any resource, either local or in fcrepo. '''
+    '''Object representing any resource, either local or in fcrepo.'''
     def __init__(self, inputpath, config):
     
         self.origpath = inputpath
         
         if self.origpath.startswith(config.repo):
             self.location = 'fcrepo'
-            self.relpath = ('/rest') + self.origpath[len(config.repo):]
-            #if self.relpath == '/rest':
-            #    self.relpath += '/'
+            self.relpath = urlparse(self.origpath).path
             
             if is_binary(self.origpath, config.auth):
                 self.type = 'binary'
                 self.metadata = self.origpath + '/fcr:metadata'
-                self.destpath = parse.quote(
-                    (config.bin + self.relpath + '.binary')
-                    )
+                self.destpath = quote((config.bin + self.relpath + '.binary'))
                 response = requests.get(self.metadata, auth=config.auth)
                 self.filename = re.search(
                     r'ebucore:filename \"(.+?)\"', response.text
@@ -163,9 +170,7 @@ class Resource():
                     ).group(1)
             else:
                 self.type = 'rdf'
-                self.destpath = parse.quote(
-                    (config.desc + self.relpath + config.ext)
-                    )
+                self.destpath = quote((config.desc + self.relpath + config.ext))
                 self.graph = rdflib.Graph().parse(self.origpath)
         
         elif self.origpath.startswith(config.bin):
@@ -174,8 +179,7 @@ class Resource():
             self.relpath = self.origpath[len(config.bin):]
             if not self.relpath.endswith('.binary'):
                 print('ERROR: Binary resource lacks expected extension!')
-            self.destpath = (config.repo[:-len('/rest/')] + 
-                            self.relpath[:-len('.binary')])
+            self.destpath = config.repobase + self.relpath[:-len('.binary')]
             self.sha1 = calculate_sha1(self.origpath)
             
         elif self.origpath.startswith(config.desc):
@@ -184,8 +188,7 @@ class Resource():
             self.relpath = self.origpath[len(config.desc):]
             if not self.relpath.endswith(config.ext):
                 print('ERROR: RDF resource lacks expected extension!')
-            self.destpath = (config.repo[:-len('/rest/')] +
-                            self.relpath[:-len(config.ext)])
+            self.destpath = config.repobase + self.relpath[:-len(config.ext)]
             self.graph = rdflib.Graph().parse(location=self.origpath,
                                               format=config.lang
                                               )
@@ -223,7 +226,16 @@ def main():
                         help='''Path to file to store output. 
                                 Defaults to stdout.''',
                         action='store',
-                        required=False
+                        required=False,
+                        default=None
+                        )
+    
+    parser.add_argument('-v', '--verbose',
+                        help='''Show details of each resource checked on 
+                                screen.''',
+                        action='store_true',
+                        required=False,
+                        default=False
                         )
                         
     parser.add_argument('configfile',
@@ -240,53 +252,73 @@ def main():
         trees = [FcrepoWalker(config.repo, args.user)]
     elif config.mode == 'import':
         trees = [LocalWalker(config.bin), LocalWalker(config.desc)]
+        
+    # Set up log file, if specified
+    if args.log:
+        logfile = open(args.log, 'w')
+    else:
+        logfile = sys.stdout
+        
+    counter = 1
     
     # Step through each iterator and verify resources
     for walker in trees:
-        counter = 1
-        
         for filepath in walker:
             if filepath is not None:
                 original = Resource(filepath, config)
-                
-                print("\nRESOURCE {0}: {1} {2}".format(
-                      counter, original.location, original.type
-                      ))
-                print("  rel  =>", original.relpath)
-                print("  orig =>", original.origpath)
-                print("  dest =>", original.destpath)
-                
                 destination = Resource(original.destpath, config)
-                
-                print("\n  Comparing the original resource to its copy...")
                 
                 if original.type == 'binary':
                     if original.sha1 == destination.sha1:
-                        print("  SHA1 orig/dest => {0} = {1}".format(
-                            original.sha1, destination.sha1
-                            ))
+                        verified = True
+                        verification = original.sha1
                     else:
-                        print("  ERROR! {0} != {1}".format(
+                        verified = False
+                        verification = "{0} != {1}".format(
                             original.sha1, destination.sha1
-                            ))
+                            )
                 
                 elif original.type == 'rdf':
-                    print("  Triples: orig {0} / dest {1}".format(
-                        len(original.graph), len(destination.graph)
-                        ))
                     if compare.isomorphic(original.graph, destination.graph):
-                        print("  Success! => Graphs match.")
+                        verified = True
+                        verification = "{0} triples match".format(
+                                        len(original.graph)
+                                        )
                     else:
-                        print("  ERROR! Graphs do not match.")
-                    
+                        verified = False
+                        verification = ('{0}+{1} triples - mismatch'.format(
+                                            len(original.graph),
+                                            len(desination.graph)
+                                            ))
+                
+                # If verbose flag is set, print full resource details to screen
+                if args.verbose:
+                    print("\nRESOURCE {0}: {1} {2}".format(
+                          counter, original.location, original.type
+                          ))
+                    print("  rel  =>", original.relpath)
+                    print("  orig =>", original.origpath)
+                    print("  dest =>", original.destpath)
+                    print("  Verifying original to copy... ", end='')
+                    print("{0} -- {1}".format(verified, verification))
+                
+                # Display a simple counter
+                else:
+                    print("Checked {0} resources...".format(counter), end='\r')
+                
+                # Log results to logger report
+                logfile.write(','.join([str(counter), original.type,
+                                        original.origpath, original.destpath, 
+                                        str(verified), verification]
+                                        ) + '\n')
                 counter += 1
+    
+    # Clear the resource counter display
+    print('')
 
+    if args.log:
+        logfile.close()
 
-    '''
-    # close file if one was opened
-    if args.output:
-        fh.close()
-    '''
 
 if __name__ == "__main__":
     main()
