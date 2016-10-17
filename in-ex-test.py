@@ -2,10 +2,14 @@
 # -*- coding: utf-8 -*-
 
 import argparse
-import os
+from hashlib import sha1
+import os.path
 import rdflib
+import rdflib.compare as compare
+import re
 import requests
 import sys
+from urllib import parse
 
 
 def is_binary(node, auth):
@@ -20,6 +24,18 @@ def is_binary(node, auth):
     else:
         print("Error communicating with repository.")
         sys.exit(1)
+
+
+def calculate_sha1(filepath):
+    ''' Given a file or stream, return the sha1 checksum. '''
+    with open(filepath, 'rb') as f:
+        sh = sha1()
+        while True:
+            data = f.read(8192)
+            if not data:
+                break
+            sh.update(data)
+    return sh.hexdigest()
 
 
 def get_child_nodes(node, auth):
@@ -51,8 +67,11 @@ def get_directory_contents(localpath):
 
 
 class Config():
-    def __init__(self, configfile):
+    ''' Object representing the options from import/export config and 
+        command-line arguments. '''
+    def __init__(self, configfile, auth):
         print("Loading configuration options from import/export config file...")
+        self.auth = auth
         with open(configfile, 'r') as f:
             opts = [line for line in f.read().split('\n')]
         for line in range(len(opts)):
@@ -66,6 +85,8 @@ class Config():
                 self.bin = opts[line + 1]
             elif opts[line] == '-x':
                 self.ext = opts[line + 1]
+            elif opts[line] == '-l':
+                self.lang = opts[line + 1]
 
 
 class Walker:
@@ -104,53 +125,78 @@ class LocalWalker(Walker):
             raise StopIteration()
         else:
             current = self.to_check.pop()
-            children = get_directory_contents(current)
-            if children:
-                self.to_check.extend(children)
+            if os.path.basename(current).startswith('.'):
                 return None
             else:
-                return current
+                children = get_directory_contents(current)
+                if children:
+                    self.to_check.extend(children)
+                    return None
+                else:
+                    return current
 
 
 class Resource():
-    ''' Object representing a resource, either local or in fcrepo. '''
-    def __init__(self, path, config):
-        if path.startswith(config.repo):
-            print("this is an fcrepo resource")
-        elif path.startswith(config.bin):
-            print("this is a local binary")
-        elif path.startswith(config.desc):
-            print("this is a local rdf resource")
-        else:
-            print("ERROR reading resource at {0}.".format(path))
+    ''' Object representing any resource, either local or in fcrepo. '''
+    def __init__(self, inputpath, config):
     
+        self.origpath = inputpath
         
+        if self.origpath.startswith(config.repo):
+            self.location = 'fcrepo'
+            self.relpath = ('/rest') + self.origpath[len(config.repo):]
+            #if self.relpath == '/rest':
+            #    self.relpath += '/'
+            
+            if is_binary(self.origpath, config.auth):
+                self.type = 'binary'
+                self.metadata = self.origpath + '/fcr:metadata'
+                self.destpath = parse.quote(
+                    (config.bin + self.relpath + '.binary')
+                    )
+                response = requests.get(self.metadata, auth=config.auth)
+                self.filename = re.search(
+                    r'ebucore:filename \"(.+?)\"', response.text
+                    ).group(1)
+                self.sha1 = re.search(
+                    r'premis:hasMessageDigest <urn:sha1:(.+?)>', response.text
+                    ).group(1)
+            else:
+                self.type = 'rdf'
+                self.destpath = parse.quote(
+                    (config.desc + self.relpath + config.ext)
+                    )
+                self.graph = rdflib.Graph().parse(self.origpath)
         
-        
-        
-    '''   
-    def local_to_fcrepo(self, config):
-        if self.fullpath.endswith('fcr%3Ametadata.ttl'):
-            self.resourcetype = 'rdf'
-            # replace end with fcr:metadata and remove descdir
-        elif self.fullpath.endswith('.binary'):
-            # remove extension and bindir
-            self.resourcetype = 'nonrdf'
+        elif self.origpath.startswith(config.bin):
+            self.location = 'local'
+            self.type = 'binary'
+            self.relpath = self.origpath[len(config.bin):]
+            if not self.relpath.endswith('.binary'):
+                print('ERROR: Binary resource lacks expected extension!')
+            self.destpath = (config.repo[:-len('/rest/')] + 
+                            self.relpath[:-len('.binary')])
+            self.sha1 = calculate_sha1(self.origpath)
+            
+        elif self.origpath.startswith(config.desc):
+            self.location = 'local'
+            self.type = 'rdf'
+            self.relpath = self.origpath[len(config.desc):]
+            if not self.relpath.endswith(config.ext):
+                print('ERROR: RDF resource lacks expected extension!')
+            self.destpath = (config.repo[:-len('/rest/')] +
+                            self.relpath[:-len(config.ext)])
+            self.graph = rdflib.Graph().parse(location=self.origpath,
+                                              format=config.lang
+                                              )
         else:
-            self.resourcetype = 'rdf'
-            # remove descdir and extension
-        result = config.fcrepo
-        
-        pass 
-    
-    def fcrepo_to_local(self, config):
-        pass '''
-        
+            print("ERROR reading resource at {0}.".format(self.origpath))
+
 
 def main():
 
     def credentials(user):
-        '''Custom '''
+        '''Custom handling of credentials passed as argument.'''
         auth = tuple(user.split(':'))
         if len(auth) == 2:
             return auth
@@ -169,7 +215,8 @@ def main():
                                 username:password.''',
                         action='store',
                         type=credentials,
-                        required=False
+                        required=False,
+                        default=None
                         )
     
     parser.add_argument('-l', '--log',
@@ -185,19 +232,54 @@ def main():
                         )
                         
     args = parser.parse_args()
-
-    config = Config(args.configfile)
     
+    
+    # Create configuration object and setup import/export iterators
+    config = Config(args.configfile, args.user)
     if config.mode == 'export':
         trees = [FcrepoWalker(config.repo, args.user)]
     elif config.mode == 'import':
         trees = [LocalWalker(config.bin), LocalWalker(config.desc)]
-        
+    
+    # Step through each iterator and verify resources
     for walker in trees:
-        for resource in walker:
-            if resource:
-                print(resource)
-                r = Resource(resource, config)
+        counter = 1
+        
+        for filepath in walker:
+            if filepath is not None:
+                original = Resource(filepath, config)
+                
+                print("\nRESOURCE {0}: {1} {2}".format(
+                      counter, original.location, original.type
+                      ))
+                print("  rel  =>", original.relpath)
+                print("  orig =>", original.origpath)
+                print("  dest =>", original.destpath)
+                
+                destination = Resource(original.destpath, config)
+                
+                print("\n  Comparing the original resource to its copy...")
+                
+                if original.type == 'binary':
+                    if original.sha1 == destination.sha1:
+                        print("  SHA1 orig/dest => {0} = {1}".format(
+                            original.sha1, destination.sha1
+                            ))
+                    else:
+                        print("  ERROR! {0} != {1}".format(
+                            original.sha1, destination.sha1
+                            ))
+                
+                elif original.type == 'rdf':
+                    print("  Triples: orig {0} / dest {1}".format(
+                        len(original.graph), len(destination.graph)
+                        ))
+                    if compare.isomorphic(original.graph, destination.graph):
+                        print("  Success! => Graphs match.")
+                    else:
+                        print("  ERROR! Graphs do not match.")
+                    
+                counter += 1
 
 
     '''
